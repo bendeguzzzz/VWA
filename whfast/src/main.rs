@@ -259,25 +259,29 @@ impl System {
             for j in 0..i {
                 sum_until_i += self.masses[j];
             }
-            let a = sum_until_i * self.positions[i]
-                / (self.positions[i].norm_squared() * self.positions[i].norm());
+            let a = sum_until_i * self.positions[i] / self.positions[i].norm().powi(2);
             self.velocities[i] += a * dt;
         }
     }
-    pub fn h_interaction_2(&self) -> Vec<f64> {
-        let mut accelerations: Vec<f64> = Vec::new();
+    pub fn h_interaction_2(&self) -> Vec<Vector3<f64>> {
+        let mut accelerations: Vec<Vector3<f64>> = Vec::with_capacity(self.n);
         for i in 0..self.n {
+            let mut a: Vector3<f64> = Vector3::new(0.0, 0.0, 0.0);
             for j in i + 1..self.n {
                 if j == 1 {
                     break; // exclude j = 1
                 }
+                let r_diff = self.positions[i] - self.positions[j];
+                a += self.masses[j] * r_diff / r_diff.norm().powi(3);
             }
+            accelerations.push(a);
         }
 
-        Vec::new()
+        accelerations
     }
 
-    pub fn update(&self) {}
+    pub fn dkd(&self, dt: f64) {} //drift kick drift
+    pub fn simulate(&self) {}
 }
 
 fn main() {
