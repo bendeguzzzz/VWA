@@ -269,7 +269,7 @@ impl System {
             let mut a: Vector3<f64> = Vector3::new(0.0, 0.0, 0.0);
             for j in i + 1..self.n {
                 if j == 1 {
-                    break; // exclude j = 1
+                    continue; // exclude j = 1
                 }
                 let r_diff = self.positions[i] - self.positions[j];
                 a += self.masses[j] * r_diff / r_diff.norm().powi(3);
