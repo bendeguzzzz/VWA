@@ -1,0 +1,3 @@
+[submodule "Py3Molecule"]
+	path = Py3Molecule
+	url = https://github.com/bendeguzzzz/Py3Molecule.git
