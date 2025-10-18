@@ -1,3 +1,4 @@
+/// SOURCE: Rein & Tamayo 2015 (https://arxiv.org/pdf/1506.01084)
 use nalgebra::Vector3;
 mod stumpff;
 use num_traits::pow::Pow;
