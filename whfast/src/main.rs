@@ -1,3 +1,11 @@
+//TODO: Optimize the code, use cache and precalculated vecs
+// + remove new instance of vec for each iteration,
+// use util functions instead, seperate the codebase for more visibility,
+//
+// also use buffer for often used stuff between iterations
+
+use std::f64;
+
 /// SOURCE: Rein & Tamayo 2015 (https://arxiv.org/pdf/1506.01084)
 use nalgebra::Vector3;
 mod stumpff;
@@ -8,9 +16,6 @@ struct System {
     masses: Vec<f64>,
     positions: Vec<Vector3<f64>>,
     velocities: Vec<Vector3<f64>>,
-    t: f64,
-    dt: f64,
-    t_max: f64,
     cumulative_masses: Vec<f64>,
     n: usize,
 }
@@ -46,9 +51,6 @@ impl System {
         masses: Vec<f64>,
         positions: Vec<Vector3<f64>>,
         velocities: Vec<Vector3<f64>>,
-        t: f64,
-        dt: f64,
-        t_max: f64,
     ) -> Result<Self, SystemError> {
         if masses.is_empty() {
             return Err(SystemError::EmptySystem);
@@ -77,9 +79,7 @@ impl System {
             masses,
             positions,
             velocities,
-            t,
-            dt,
-            t_max,
+
             cumulative_masses,
             n,
         })
@@ -91,30 +91,18 @@ impl System {
         cumulative: &[f64],
     ) {
         let n = vec.len();
-
         if n == 0 {
             return;
         }
 
-        for i in 0..n {
-            let mut r = masses[i] * vec[i];
+        let mut r = masses[0] * vec[0];
 
-            for j in (i + 1)..n {
-                let cumulative_prev = cumulative[j - 1];
-
-                if cumulative_prev.abs() < f64::EPSILON {
-                    continue;
-                }
-
-                let r_prime_j = vec[j] - r / cumulative_prev;
-                r = r * (1.0 + masses[j] / cumulative_prev) + masses[j] * r_prime_j;
-            }
-
-            let total_mass = cumulative[n - 1];
-            if total_mass.abs() > f64::EPSILON {
-                vec[i] = r / total_mass;
-            }
+        for i in 1..n {
+            let r_prime_i = vec[i] - r / cumulative[i - 1];
+            r = r * (1.0 + masses[i] / cumulative[i - 1]) + masses[i] * r_prime_i;
         }
+
+        vec[0] = r / cumulative[n - 1]; // Center of mass
     }
 
     /// Generic helper function to transform vectors from Jacobi to Cartesian coordinates
@@ -158,10 +146,10 @@ impl System {
     }
 
     /// Transform velocity coordinates from Cartesian to Jacobi coordinates
-    pub fn transform_velocities_from_cartesian_to_jacobi(&mut self) {
+    pub fn _transform_velocities_from_cartesian_to_jacobi(&mut self) {
         Self::transform_cartesian_to_jacobi(
             &mut self.velocities,
-            &self.masses,
+            &mut self.masses,
             &self.cumulative_masses,
         );
     }
@@ -176,7 +164,7 @@ impl System {
     }
 
     /// Transform velocity coordinates from Jacobi to Cartesian coordinates
-    pub fn transform_velocities_from_jacobi_to_cartesian(&mut self) {
+    pub fn _transform_velocities_from_jacobi_to_cartesian(&mut self) {
         Self::transform_jacobi_to_cartesian(
             &mut self.velocities,
             &self.masses,
@@ -186,27 +174,25 @@ impl System {
 
     // Accessor Methods
 
-    pub fn positions(&self) -> &[Vector3<f64>] {
+    pub fn _positions(&self) -> &[Vector3<f64>] {
         &self.positions
     }
 
-    pub fn velocities(&self) -> &[Vector3<f64>] {
+    pub fn _velocities(&self) -> &[Vector3<f64>] {
         &self.velocities
     }
 
-    pub fn masses(&self) -> &[f64] {
+    pub fn _masses(&self) -> &[f64] {
         &self.masses
     }
 
-    pub fn time(&self) -> f64 {
-        self.t
-    }
     /// G-functions (Stiefel & Scheifele 1971)
     pub fn stiefel_scheifele(&self, n: u8, beta: f64, x: f64) -> f64 {
         x.pow(n) * stumpff::stumpff(beta * x.pow(2), n)
     }
     /// We are following the notation of the paper
     pub fn h_kepler(&mut self, dt: f64, output: bool) {
+        println!("h_kepler called with dt={}, output={}", dt, output);
         for i in 1..self.n {
             // loop through all of the bodies
             // note this method takes a dt input, so when calling this function we should give dt/2 since it also updates the positions
@@ -221,6 +207,7 @@ impl System {
             let zeta_0 = m_total - beta * r_0_magnitude;
             let eta = eta_0 * dt / r_0_magnitude_sq;
             let mut x: f64 = (dt / r_0_magnitude) * (1.0 - 0.5 * eta);
+            println!("Initial guess: {}", x);
             let mut x_prev1 = 0.0;
             loop {
                 //Newton's method
@@ -235,10 +222,15 @@ impl System {
                     / (r_0_magnitude
                         + eta_0 * self.stiefel_scheifele(1, beta, x)
                         + zeta_0 * self.stiefel_scheifele(2, beta, x));
-                if x == x_prev1 || x == x_prev2 {
+                println!("{}", x);
+
+                if (x - x_prev1).abs() <= f64::EPSILON || (x - x_prev2).abs() <= f64::EPSILON {
+                    println!("Difference is smaller than f64::EPSILON");
                     break;
                 }
+                //println!("{}", x);
             }
+            println!("Finished newton's method");
             let r = r_0_magnitude
                 + eta_0 * self.stiefel_scheifele(1, beta, x)
                 + zeta_0 * self.stiefel_scheifele(2, beta, x);
@@ -259,12 +251,13 @@ impl System {
             for j in 0..i {
                 sum_until_i += self.masses[j];
             }
-            let a = sum_until_i * self.positions[i] / self.positions[i].norm().powi(2);
+            let a = sum_until_i * self.positions[i] / self.positions[i].norm().powi(3);
             self.velocities[i] += a * dt;
         }
     }
     pub fn h_interaction_2(&self) -> Vec<Vector3<f64>> {
         let mut accelerations: Vec<Vector3<f64>> = Vec::with_capacity(self.n);
+        let mut accelerations_jacobi: Vec<Vector3<f64>> = Vec::with_capacity(self.n);
         for i in 0..self.n {
             let mut a: Vector3<f64> = Vector3::new(0.0, 0.0, 0.0);
             for j in i + 1..self.n {
@@ -276,14 +269,117 @@ impl System {
             }
             accelerations.push(a);
         }
+        let mut a_total: Vector3<f64> = Vector3::new(0.0, 0.0, 0.0);
+        let mut m_total_until_i = 0.0;
+        for i in 0..self.n {
+            a_total += self.masses[i] * accelerations[0];
+            m_total_until_i += self.masses[i];
+        }
+        accelerations_jacobi.push(accelerations[0] - a_total / m_total_until_i);
+        for i in 1..self.n {
+            let mut m_total_until_i = 0.0;
+            let mut f_j: Vector3<f64> = Vector3::new(0.0, 0.0, 0.0);
+            for j in 0..i {
+                m_total_until_i += self.masses[j];
+                f_j += self.masses[j] * accelerations[j];
+            }
+            accelerations_jacobi.push(accelerations[i] - f_j / m_total_until_i);
+        }
 
-        accelerations
+        //convert to jacobi
+
+        accelerations_jacobi
     }
 
-    pub fn dkd(&self, dt: f64) {} //drift kick drift
-    pub fn simulate(&self) {}
+    pub fn dkd(&mut self, dt: f64, mut t: f64, t_max: f64, _output_t: f64) {
+        println!("Starting DKD: t={}, t_max={}, dt={}", t, t_max, dt);
+        self.transform_coordinates_from_cartesian_to_jacobi();
+        self.h_kepler(dt / 2.0, false);
+
+        let mut iteration = 0;
+        while t < t_max {
+            println!("Iteration {}: t={}", iteration, t);
+            iteration += 1;
+
+            if iteration > 1000 {
+                panic!("Too many iterations!");
+            }
+
+            self.h_interaction_1(dt);
+            self.transform_coordinates_from_jacobi_to_cartesian();
+            let accelerations = self.h_interaction_2();
+            for i in 0..self.n {
+                self.velocities[i] += accelerations[i] * dt;
+            }
+            self.transform_coordinates_from_cartesian_to_jacobi();
+
+            if t + dt < t_max {
+                self.h_kepler(dt, false);
+            }
+
+            t += dt;
+            println!("After increment: t={}", t);
+        }
+
+        println!("Exiting loop");
+        self.h_kepler(dt / 2.0, true);
+        self.transform_coordinates_from_jacobi_to_cartesian();
+    }
 }
 
 fn main() {
-    print!("Hello, world!")
+    let m_0 = 1.0;
+    let m_1 = 0.000003;
+    let m: Vec<f64> = vec![m_0, m_1];
+
+    let r_0: Vector3<f64> = Vector3::new(0.0, 0.0, 0.0);
+    let r_1: Vector3<f64> = Vector3::new(1.0, 0.0, 0.0);
+    let r: Vec<Vector3<f64>> = vec![r_0, r_1];
+
+    let v_0: Vector3<f64> = Vector3::new(0.0, 0.0, 0.0);
+    let v_1: Vector3<f64> = Vector3::new(0.0, 1.0, 0.0);
+    let v: Vec<Vector3<f64>> = vec![v_0, v_1];
+
+    let t = 0.0;
+    let dt = 0.01; // Smaller timestep for better accuracy
+    let t_max = 6.283185307179586; // One full orbit (2π)
+
+    let mut system = System::new(m, r, v).unwrap();
+
+    // Calculate initial energy
+    let initial_energy = calculate_energy(&system);
+    println!("Initial energy: {}", initial_energy);
+    println!("Initial position: {:?}", system.positions[1]);
+    println!("Initial velocity: {:?}", system.velocities[1]);
+
+    system.dkd(dt, t, t_max, 0.0);
+
+    // Calculate final energy
+    let final_energy = calculate_energy(&system);
+    println!("\nFinal energy: {}", final_energy);
+    println!("Final position: {:?}", system.positions[1]);
+    println!("Final velocity: {:?}", system.velocities[1]);
+    println!(
+        "Energy error: {:.2e}",
+        (final_energy - initial_energy).abs() / initial_energy.abs()
+    );
+    println!("Distance from origin: {}", system.positions[1].norm());
+}
+
+fn calculate_energy(system: &System) -> f64 {
+    let mut kinetic = 0.0;
+    let mut potential = 0.0;
+
+    for i in 0..system.n {
+        kinetic += 0.5 * system.masses[i] * system.velocities[i].norm_squared();
+    }
+
+    for i in 0..system.n {
+        for j in i + 1..system.n {
+            let r_diff = system.positions[i] - system.positions[j];
+            potential -= system.masses[i] * system.masses[j] / r_diff.norm();
+        }
+    }
+
+    kinetic + potential
 }
